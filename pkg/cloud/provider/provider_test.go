@@ -292,3 +292,104 @@ func newTestCustomProvider(t *testing.T, pricing map[string]string) *CustomProvi
 		Config: providerConfig,
 	}
 }
+
+func TestCustomProviderPricingStableAcrossUpdates(t *testing.T) {
+	confMan := config.NewConfigFileManager(storage.NewMemoryStorage())
+	customProvider := &CustomProvider{
+		Config: NewProviderConfig(confMan, "default.json"),
+	}
+
+	pricing := map[string]string{
+		"CPU":     "0.006407",
+		"RAM":     "0.000859",
+		"spotCPU": "0.006655",
+		"spotRAM": "0.000892",
+		"GPU":     "0.95",
+		"storage": "0.00005479452",
+	}
+
+	if _, err := customProvider.UpdateConfigFromConfigMap(pricing); err != nil {
+		t.Fatalf("UpdateConfigFromConfigMap returned error: %v", err)
+	}
+
+	// Repeated reads of the config must return the same configured values.
+	for i := 0; i < 5; i++ {
+		conf, err := customProvider.GetConfig()
+		if err != nil {
+			t.Fatalf("GetConfig returned error on iteration %d: %v", i, err)
+		}
+
+		if conf.CPU != pricing["CPU"] {
+			t.Errorf("iteration %d: CPU = %q, want %q", i, conf.CPU, pricing["CPU"])
+		}
+		if conf.RAM != pricing["RAM"] {
+			t.Errorf("iteration %d: RAM = %q, want %q", i, conf.RAM, pricing["RAM"])
+		}
+		if conf.SpotCPU != pricing["spotCPU"] {
+			t.Errorf("iteration %d: SpotCPU = %q, want %q", i, conf.SpotCPU, pricing["spotCPU"])
+		}
+		if conf.SpotRAM != pricing["spotRAM"] {
+			t.Errorf("iteration %d: SpotRAM = %q, want %q", i, conf.SpotRAM, pricing["spotRAM"])
+		}
+		if conf.GPU != pricing["GPU"] {
+			t.Errorf("iteration %d: GPU = %q, want %q", i, conf.GPU, pricing["GPU"])
+		}
+		if conf.Storage != pricing["storage"] {
+			t.Errorf("iteration %d: Storage = %q, want %q", i, conf.Storage, pricing["storage"])
+		}
+	}
+
+	// Updating with the same values again must not divide or mutate them.
+	if _, err := customProvider.UpdateConfigFromConfigMap(pricing); err != nil {
+		t.Fatalf("UpdateConfigFromConfigMap (second update) returned error: %v", err)
+	}
+
+	conf, err := customProvider.GetConfig()
+	if err != nil {
+		t.Fatalf("GetConfig returned error after second update: %v", err)
+	}
+	if conf.CPU != pricing["CPU"] {
+		t.Errorf("CPU = %q, want %q after second update", conf.CPU, pricing["CPU"])
+	}
+	if conf.RAM != pricing["RAM"] {
+		t.Errorf("RAM = %q, want %q after second update", conf.RAM, pricing["RAM"])
+	}
+	if conf.SpotCPU != pricing["spotCPU"] {
+		t.Errorf("SpotCPU = %q, want %q after second update", conf.SpotCPU, pricing["spotCPU"])
+	}
+	if conf.SpotRAM != pricing["spotRAM"] {
+		t.Errorf("SpotRAM = %q, want %q after second update", conf.SpotRAM, pricing["spotRAM"])
+	}
+	if conf.GPU != pricing["GPU"] {
+		t.Errorf("GPU = %q, want %q after second update", conf.GPU, pricing["GPU"])
+	}
+	if conf.Storage != pricing["storage"] {
+		t.Errorf("Storage = %q, want %q after second update", conf.Storage, pricing["storage"])
+	}
+
+	// Node pricing for an unknown key must fall back to the configured
+	// default pricing, not a divided value.
+	if err := customProvider.DownloadPricingData(); err != nil {
+		t.Fatalf("DownloadPricingData returned error: %v", err)
+	}
+
+	node, _, err := customProvider.NodePricing(unknownCustomPricingKey{})
+	if err != nil {
+		t.Fatalf("NodePricing returned error: %v", err)
+	}
+	if node.VCPUCost != pricing["CPU"] {
+		t.Errorf("VCPUCost = %q, want configured value %q", node.VCPUCost, pricing["CPU"])
+	}
+	if node.RAMCost != pricing["RAM"] {
+		t.Errorf("RAMCost = %q, want configured value %q", node.RAMCost, pricing["RAM"])
+	}
+}
+
+// unknownCustomPricingKey is a models.Key that matches no entry in the
+// CustomProvider pricing map, forcing the fallback to the default pricing.
+type unknownCustomPricingKey struct{}
+
+func (unknownCustomPricingKey) ID() string       { return "unknown-node" }
+func (unknownCustomPricingKey) Features() string { return "unknown-feature" }
+func (unknownCustomPricingKey) GPUType() string  { return "" }
+func (unknownCustomPricingKey) GPUCount() int    { return 0 }
